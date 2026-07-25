@@ -107,10 +107,6 @@ function Dashboard({ username, onLogout }) {
         <h2>Automation</h2>
         <nav>
           <a href="#" className="active">Dashboard</a>
-          <a href="#">Tasks</a>
-          <a href="#">Reports</a>
-          <a href="#">Users</a>
-          <a href="#">Settings</a>
         </nav>
         <button className="logout-btn" onClick={onLogout}>Logout</button>
       </aside>
