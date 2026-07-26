@@ -11,6 +11,7 @@ function Dashboard({ username, onLogout }) {
   const [fileName, setFileName] = useState('');
   const [siNoKey, setSiNoKey] = useState('');
   const [rowStatuses, setRowStatuses] = useState({});
+  const [selectedRows, setSelectedRows] = useState([]);
   const fileInputRef = useRef();
 
   const getSiNoValue = (row) => String(row[siNoKey] || '').trim().toUpperCase();
@@ -31,24 +32,62 @@ function Dashboard({ username, onLogout }) {
     setRowStatuses({});
   };
 
-  const handleRun = useCallback(async (row, i) => {
-    setRowStatuses((prev) => ({ ...prev, [i]: 'running' }));
-    try {
-      const res = await fetch('http://localhost:5000/api/calculate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          supportingBeam: row['SUPPORTING BEAM'],
-          incomingBeam: row['INCOMING BEAM'],
-          verticalShearLoad: row['GIVEN VERTICAL SHEAR LOAD (Kip)'],
-          project,
-        }),
-      });
-      setRowStatuses((prev) => ({ ...prev, [i]: res.ok ? 'pass' : 'fail' }));
-    } catch {
-      setRowStatuses((prev) => ({ ...prev, [i]: 'fail' }));
+  const hasUploadedData = tableData.length > 0 && columns.length > 0;
+
+  const getCellValue = (row, possibleKeys) => {
+    const normalized = possibleKeys.map((key) => key.toLowerCase().replace(/[^a-z0-9]/g, ''));
+    const rowKeys = Object.keys(row || {});
+
+    for (const key of rowKeys) {
+      const normalizedKey = key.toLowerCase().replace(/[^a-z0-9]/g, '');
+      if (normalized.includes(normalizedKey)) {
+        return row[key];
+      }
     }
-  }, [project]);
+
+    return '';
+  };
+
+  const handleRun = useCallback(async (rowsToRun) => {
+    if (!rowsToRun.length) return;
+
+    rowsToRun.forEach((index) => {
+      setRowStatuses((prev) => ({ ...prev, [index]: 'running' }));
+    });
+
+    for (const index of rowsToRun) {
+      const row = tableData[index];
+      const requestId = `${Date.now()}-${index}`;
+      try {
+        const res = await fetch('http://localhost:5000/api/calculate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            id: requestId,
+            siNo: getCellValue(row, [siNoKey, 'SI.NO', 'SI NO', 'SI.NO.', 'SINO', 'Si.No']),
+            supportingBeam: getCellValue(row, ['SUPPORTING BEAM', 'SUPPORTINGBEAM', 'SUPPORTING BEAM', 'SUPPORTING']),
+            incomingBeam: getCellValue(row, ['INCOMING BEAM', 'INCOMINGBEAM', 'INCOMING BEAM', 'INCOMING']),
+            verticalShearLoad: getCellValue(row, ['GIVEN VERTICAL SHEAR LOAD (Kip)', 'GIVEN VERTICAL SHEAR LOAD', 'VERTICAL SHEAR LOAD', 'VERTICALSHEARLOAD']),
+          }),
+        });
+        setRowStatuses((prev) => ({ ...prev, [index]: res.ok ? 'pass' : 'fail' }));
+      } catch {
+        setRowStatuses((prev) => ({ ...prev, [index]: 'fail' }));
+      }
+    }
+  }, [project, tableData, siNoKey]);
+
+  const toggleRowSelection = (index) => {
+    setSelectedRows((prev) => prev.includes(index) ? prev.filter((item) => item !== index) : [...prev, index]);
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedRows.length === tableData.length) {
+      setSelectedRows([]);
+    } else {
+      setSelectedRows(tableData.map((_, index) => index));
+    }
+  };
 
   const handleUpload = async (e) => {
     // Excel uploads are only allowed before a project is selected.
@@ -165,47 +204,65 @@ function Dashboard({ username, onLogout }) {
           <div className="activity-section">
             <div className="section-heading">
               <h2>{project ? `Project Data — ${project}` : 'Project Data'}</h2>
-              <span className="section-pill">{project ? 'Live data view' : 'Ready for upload'}</span>
+              <span className="section-pill">
+                {project ? 'Live data view' : hasUploadedData ? 'Uploaded file ready' : 'Ready for upload'}
+              </span>
             </div>
-            {!project ? (
-              <p className="no-data">Please select a project to view data.</p>
-            ) : tableData.length === 0 ? (
-              <p className="no-data">No data loaded. Please upload an Excel file.</p>
+            {!hasUploadedData ? (
+              <p className="no-data">
+                {project ? 'No data loaded. Please upload an Excel file.' : 'Upload an Excel file to view project data here.'}
+              </p>
             ) : (
-              <div className="table-wrapper">
-                <table>
-                  <thead>
-                    <tr>
-                      {columns.map((col) => <th key={col}>{col}</th>)}
-                      <th>Action</th>
-                      <th>Status</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {tableData.map((row, i) => (
-                      <tr key={i}>
-                        {columns.map((col) => <td key={col}>{row[col]}</td>)}
-                        <td>
-                          <button
-                            className="run-btn"
-                            onClick={() => handleRun(row, i)}
-                            disabled={rowStatuses[i] === 'running'}
-                          >
-                            {rowStatuses[i] === 'running' ? '...' : 'Run'}
-                          </button>
-                        </td>
-                        <td>
-                          {rowStatuses[i] && rowStatuses[i] !== 'running' && (
-                            <span className={`status-badge ${rowStatuses[i]}`}>
-                              {rowStatuses[i] === 'pass' ? 'Pass' : 'Fail'}
-                            </span>
-                          )}
-                        </td>
+              <>
+                <div className="table-toolbar">
+                  <label className="checkbox-row select-all-row">
+                    <input
+                      type="checkbox"
+                      checked={tableData.length > 0 && selectedRows.length === tableData.length}
+                      onChange={toggleSelectAll}
+                    />
+                    <span>Select all</span>
+                  </label>
+                  <button className="run-btn bulk-run-btn" onClick={() => handleRun(selectedRows)} disabled={!selectedRows.length}>
+                    Run selected
+                  </button>
+                </div>
+                <div className="table-wrapper">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th className="checkbox-col">
+                          <input type="checkbox" readOnly checked={false} />
+                        </th>
+                        {columns.map((col) => <th key={col}>{col}</th>)}
+                        <th>Status</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                    </thead>
+                    <tbody>
+                      {tableData.map((row, i) => (
+                        <tr key={i}>
+                          <td className="checkbox-col">
+                            <input
+                              type="checkbox"
+                              checked={selectedRows.includes(i)}
+                              onChange={() => toggleRowSelection(i)}
+                            />
+                          </td>
+                          {columns.map((col) => <td key={col}>{row[col]}</td>)}
+                          <td>
+                            {rowStatuses[i] && rowStatuses[i] !== 'running' && (
+                              <span className={`status-badge ${rowStatuses[i]}`}>
+                                {rowStatuses[i] === 'pass' ? 'Pass' : 'Fail'}
+                              </span>
+                            )}
+                            {rowStatuses[i] === 'running' && <span className="status-badge running">Running...</span>}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
             )}
           </div>
 

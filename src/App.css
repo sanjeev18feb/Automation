@@ -450,6 +450,22 @@ button {
   font-weight: 600;
 }
 
+.table-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.select-all-row {
+  margin: 0;
+}
+
+.bulk-run-btn {
+  padding: 8px 14px;
+}
+
 .table-wrapper {
   overflow-x: auto;
   width: 100%;
@@ -471,6 +487,11 @@ th {
   background: #f8fafc;
   color: #64748b;
   border-bottom: 1px solid #e2e8f0;
+}
+
+.checkbox-col {
+  width: 44px;
+  text-align: center;
 }
 
 td {
@@ -539,6 +560,11 @@ tr:last-child td {
 .status-badge.fail {
   background: #fee2e2;
   color: #dc2626;
+}
+
+.status-badge.running {
+  background: #e0f2fe;
+  color: #0369a1;
 }
 
 .no-data {
