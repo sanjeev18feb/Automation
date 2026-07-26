@@ -1,11 +1,11 @@
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
 import * as XLSX from 'xlsx';
+import { saveProject, loadProject, getAllProjectNames } from './idb';
 
-const projects = ['Project 1', 'Project 2', 'Project 3'];
 const navItems = [
   { key: 'home', label: 'Home' },
-  { key: 'calculations', label: 'Calculations' },
   { key: 'upload', label: 'Upload Excel' },
+  { key: 'calculations', label: 'Calculations' },
   { key: 'logs', label: 'Logs' },
 ];
 
@@ -20,7 +20,15 @@ function Dashboard({ username, onLogout }) {
   const [rowStatuses, setRowStatuses] = useState({});
   const [selectedRows, setSelectedRows] = useState([]);
   const [logs, setLogs] = useState([]);
+  const [savedProjects, setSavedProjects] = useState([]);
+  const [showProjectNameModal, setShowProjectNameModal] = useState(false);
+  const [pendingFileData, setPendingFileData] = useState(null);
+  const [newProjectName, setNewProjectName] = useState('');
   const fileInputRef = useRef(null);
+
+  useEffect(() => {
+    getAllProjectNames().then(setSavedProjects).catch(() => {});
+  }, []);
 
   const getSiNoValue = (row) => String(row[siNoKey] || '').trim().toUpperCase();
 
@@ -41,16 +49,28 @@ function Dashboard({ username, onLogout }) {
     setLogs((prev) => [entry, ...prev].slice(0, 12));
   }, []);
 
-  const handleProjectChange = (e) => {
+  const handleProjectChange = async (e) => {
     const nextProject = e.target.value;
     setProject(nextProject);
+    setRowStatuses({});
+    setSelectedRows([]);
+    addLog(nextProject ? `Project switched to ${nextProject}` : 'Project selection cleared', 'info');
+
+    if (nextProject && savedProjects.includes(nextProject)) {
+      const saved = await loadProject(nextProject);
+      if (saved) {
+        setTableData(saved.data.tableData);
+        setColumns(saved.data.columns);
+        setFileName(saved.data.fileName);
+        setSiNoKey(saved.data.siNoKey);
+        addLog(`Loaded saved data for ${nextProject}`, 'success');
+        return;
+      }
+    }
     setTableData([]);
     setColumns([]);
     setFileName('');
     setSiNoKey('');
-    setRowStatuses({});
-    setSelectedRows([]);
-    addLog(nextProject ? `Project switched to ${nextProject}` : 'Project selection cleared', 'info');
   };
 
   const hasUploadedData = tableData.length > 0 && columns.length > 0;
@@ -113,55 +133,48 @@ function Dashboard({ username, onLogout }) {
   };
 
   const handleUpload = async (e) => {
-    if (project) return;
-
     const file = e.target.files[0];
     if (!file) return;
-    setFileName(file.name);
-
-    const formData = new FormData();
-    formData.append('file', file);
-    try {
-      await fetch(`http://localhost:5000/api/upload?project=${encodeURIComponent(project || 'default')}`, {
-        method: 'POST',
-        body: formData,
-      });
-    } catch (err) {
-      console.warn('Backend upload failed:', err.message);
-      addLog(`Upload to backend failed for ${file.name}`, 'error');
-    }
 
     const reader = new FileReader();
     reader.onload = (evt) => {
       const workbook = XLSX.read(evt.target.result, { type: 'binary' });
-      const sheetName =
-        workbook.SheetNames.find(
-          (s) => s.toLowerCase().replace(/\s/g, '') === (project || '').toLowerCase().replace(/\s/g, '')
-        ) || workbook.SheetNames[0];
-
+      const sheetName = workbook.SheetNames[0];
       const sheet = workbook.Sheets[sheetName];
       const rawData = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
       const headerRowIndex = rawData.findIndex((row) => row.some((cell) => String(cell).trim() !== ''));
-
-      const data = XLSX.utils.sheet_to_json(sheet, {
-        defval: '',
-        range: headerRowIndex,
-      });
+      const data = XLSX.utils.sheet_to_json(sheet, { defval: '', range: headerRowIndex });
 
       if (data.length > 0) {
         const allKeys = Object.keys(data[0]);
         const detectedSiNoKey = allKeys.find((k) => k.trim().toUpperCase().replace(/[\s.]/g, '').includes('SINO')) || allKeys[1];
-
-        setSiNoKey(detectedSiNoKey);
-        setColumns(allKeys);
-        setTableData(data);
-        setSelectedRows([]);
-        addLog(`Uploaded ${file.name} with ${data.length} rows`, 'success');
+        setPendingFileData({ tableData: data, columns: allKeys, fileName: file.name, siNoKey: detectedSiNoKey });
+        setNewProjectName(file.name.replace(/\.[^.]+$/, ''));
+        setShowProjectNameModal(true);
       } else {
         addLog(`Uploaded ${file.name} but no rows were found`, 'warning');
       }
     };
     reader.readAsBinaryString(file);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  const handleSaveProject = async () => {
+    const name = newProjectName.trim();
+    if (!name || !pendingFileData) return;
+    await saveProject(name, pendingFileData);
+    setSavedProjects((prev) => prev.includes(name) ? prev : [...prev, name]);
+    setProject(name);
+    setTableData(pendingFileData.tableData);
+    setColumns(pendingFileData.columns);
+    setFileName(pendingFileData.fileName);
+    setSiNoKey(pendingFileData.siNoKey);
+    setSelectedRows([]);
+    setRowStatuses({});
+    addLog(`Saved and loaded project "${name}" with ${pendingFileData.tableData.length} rows`, 'success');
+    setShowProjectNameModal(false);
+    setPendingFileData(null);
+    setNewProjectName('');
   };
 
   const pageTitle = activePage === 'home' ? 'Home' : activePage === 'calculations' ? 'Calculations' : activePage === 'upload' ? 'Upload Excel' : 'Logs';
@@ -200,7 +213,7 @@ function Dashboard({ username, onLogout }) {
             </div>
             <select className="project-dropdown" value={project} onChange={handleProjectChange}>
               <option value="">-- Select Project --</option>
-              {projects.map((p) => (
+              {savedProjects.map((p) => (
                 <option key={p} value={p}>{p}</option>
               ))}
             </select>
@@ -323,14 +336,13 @@ function Dashboard({ username, onLogout }) {
                 Import a spreadsheet to load project rows into the workspace before running calculations.
               </p>
               <div className="upload-panel">
-                <label className={`upload-btn ${project ? 'disabled' : ''}`}>
+                <label className="upload-btn">
                   📂 Choose Excel file
                   <input
                     type="file"
                     accept=".xlsx,.xls,.csv"
                     ref={fileInputRef}
                     onChange={handleUpload}
-                    disabled={Boolean(project)}
                     style={{ display: 'none' }}
                   />
                 </label>
@@ -381,6 +393,29 @@ function Dashboard({ username, onLogout }) {
           )}
         </div>
       </main>
+
+      {showProjectNameModal && (
+        <div className="modal-overlay" role="dialog" aria-modal="true">
+          <div className="modal-card">
+            <h3>Save as project</h3>
+            <p>Enter a name for this project to appear in the dropdown.</p>
+            <div className="form-group">
+              <label>Project name</label>
+              <input
+                type="text"
+                value={newProjectName}
+                onChange={(e) => setNewProjectName(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && handleSaveProject()}
+                autoFocus
+              />
+            </div>
+            <div className="modal-actions">
+              <button className="modal-btn secondary" onClick={() => { setShowProjectNameModal(false); setPendingFileData(null); }}>Cancel</button>
+              <button className="modal-btn primary" onClick={handleSaveProject} disabled={!newProjectName.trim()}>Save</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {showLogoutModal && (
         <div className="modal-overlay" role="dialog" aria-modal="true">
